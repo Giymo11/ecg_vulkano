@@ -31,13 +31,78 @@ use vulkano::sync::GpuFuture;
 
 use std::sync::Arc;
 
+use config::Config;
+
+#[cfg(debug)]
+fn get_extensions() {
+    retuInstanceExtensions {
+        ext_debug_report: true,
+        ..vulkano_win::required_extensions()
+    };
+}
+
 fn main() {
     println!("Hello, world!");
 
+    let mut settings = Config::new();
+    settings
+        .merge(config::File::with_name("assets/settings"))
+        .expect("Failed to read settings file!");
+    let settings_width = settings.get::<u32>("window.width").unwrap_or(800);
+    let settings_height = settings.get::<u32>("window.height").unwrap_or(600);
+    let settings_title = settings
+        .get_str("window.title")
+        .unwrap_or("Please enter a window title!".to_string());
+
     // get vulkan instance
+    #[cfg(debug_assertions)]
+    let instance = {
+        use vulkano::instance::InstanceExtensions;
+
+        let extensions = InstanceExtensions {
+            ext_debug_report: true,
+            ..vulkano_win::required_extensions()
+        };
+        // NOTE: To simplify the example code we won't verify these layer(s) are actually in the layers list:
+        let layer = "VK_LAYER_LUNARG_standard_validation";
+        let layers = vec![layer];
+        Instance::new(None, &extensions, layers).expect("failed to create Vulkan instance")
+    };
+
+    #[cfg(not(debug_assertions))]
     let instance = {
         let extensions = vulkano_win::required_extensions();
         Instance::new(None, &extensions, None).expect("failed to create Vulkan instance")
+    };
+
+    #[cfg(debug_assertions)]
+    let _debug_callback = {
+        use vulkano::instance::debug::DebugCallback;
+        use vulkano::instance::debug::MessageTypes;
+        // create and use the debug callbacks
+        let all_messages = MessageTypes {
+            error: true,
+            warning: true,
+            performance_warning: true,
+            information: true,
+            debug: true,
+        };
+        DebugCallback::new(&instance, all_messages, |msg| {
+            let ty = if msg.ty.error {
+                "error"
+            } else if msg.ty.warning {
+                "warning"
+            } else if msg.ty.performance_warning {
+                "performance_warning"
+            } else if msg.ty.information {
+                "information"
+            } else if msg.ty.debug {
+                "debug"
+            } else {
+                panic!("no-impl");
+            };
+            println!("{} {}: {}", msg.layer_prefix, ty, msg.description);
+        })
     };
 
     // choose physical device
@@ -53,6 +118,7 @@ fn main() {
     // build window and surface
     let mut events_loop = EventsLoop::new();
     let surface = WindowBuilder::new()
+        .with_title(settings_title)
         .build_vk_surface(&events_loop, instance.clone())
         .unwrap();
 
@@ -88,7 +154,9 @@ fn main() {
             .capabilities(physical)
             .expect("failed to get surface capabilities");
 
-        dimensions = caps.current_extent.unwrap_or([1024, 768]);
+        dimensions = caps
+            .current_extent
+            .unwrap_or([settings_width, settings_height]);
         let alpha = caps.supported_composite_alpha.iter().next().unwrap();
         let format = caps.supported_formats[0].0;
 
@@ -305,7 +373,7 @@ void main() {
                 .begin_render_pass(
                     framebuffers.as_ref().unwrap()[image_num].clone(),
                     false,
-                    vec![[0.0, 0.0, 1.0, 1.0].into()],
+                    vec![[1.0, 1.0, 1.0, 1.0].into()],
                 )
                 .unwrap()
                 .draw(
@@ -320,9 +388,11 @@ void main() {
                 .unwrap()
                 .build()
                 .unwrap();
-        
-        let future = previous_frame_end.join(acquire_future)
-            .then_execute(queue.clone(), command_buffer).unwrap()
+
+        let future = previous_frame_end
+            .join(acquire_future)
+            .then_execute(queue.clone(), command_buffer)
+            .unwrap()
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
             .then_signal_fence_and_flush();
 
@@ -344,12 +414,25 @@ void main() {
         // `command_buffer::submit`, or `present` will block for some time. This happens when the
         // GPU's queue is full and the driver has to wait until the GPU finished some work.
         let mut done = false;
-        events_loop.poll_events(|ev| {
-            match ev {
-                winit::Event::WindowEvent { event: winit::WindowEvent::CloseRequested, .. } => done = true,
-                _ => ()
+        events_loop.poll_events(|ev| match ev {
+            winit::Event::DeviceEvent {
+                event: winit::DeviceEvent::Key(pressed_key),
+                ..
+            } => {
+                if pressed_key.state == winit::ElementState::Released && pressed_key.virtual_keycode == Some(winit::VirtualKeyCode::Escape) {
+                    done = true
+                } else {
+                    println!("Key Pressed:  {:?}", pressed_key)
+                }
             }
+            winit::Event::WindowEvent {
+                event: winit::WindowEvent::CloseRequested,
+                ..
+            } => done = true,
+            _ => (),
         });
-        if done { return; }
+        if done {
+            return;
+        }
     }
 }
