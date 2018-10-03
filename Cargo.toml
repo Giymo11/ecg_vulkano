@@ -1,0 +1,16 @@
+[package]
+name = "ecg_vulkano"
+version = "0.1.0"
+authors = ["Giymo11 <gizmo.head@yahoo.de>"]
+edition = "2018"
+
+[dependencies]
+config = "0.9"
+vulkano = "0.10"
+vulkano-shader-derive = "0.10"
+vulkano-win = "0.10"
+winit = "0.17"
+cgmath = "0.16"
+image = "0.19"
+time = "0.1.37"
+
