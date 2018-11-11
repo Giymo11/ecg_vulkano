@@ -35,7 +35,7 @@ use config::Config;
 
 #[cfg(debug)]
 fn get_extensions() {
-    retuInstanceExtensions {
+    InstanceExtensions {
         ext_debug_report: true,
         ..vulkano_win::required_extensions()
     };

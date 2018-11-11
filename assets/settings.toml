@@ -3,3 +3,8 @@ width = 800
 height = 600
 title = "ECG Vulkano"
 
+
+[camera]
+fov = 60.0
+near = 0.1
+far = 100.0
