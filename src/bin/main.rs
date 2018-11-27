@@ -1,4 +1,3 @@
-
 // This is a triangle example!
 // heavily copied from https://github.com/vulkano-rs/vulkano-examples/blob/master/src/bin/triangle.rs
 
@@ -44,21 +43,20 @@ use winit::dpi::LogicalSize;
 
 use vulkano_win::VkSurfaceBuild;
 
-use cgmath::prelude::*;
-use cgmath::{Matrix4, Vector3, Vector4, Rad, Deg};
+use cgmath::{Matrix4, Vector3, Vector4, Deg};
 
-use ecg_vulkano::{Vertex, Normal, VERTICES, NORMALS, INDICES};
+use ecg_vulkano::*;
 
 
 mod vs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
             ty: "vertex",
             path: "assets/simple_vert.glsl"
         }
 }
 
 mod fs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
             ty: "fragment",
             path: "assets/simple_frag.glsl"
         }
@@ -67,7 +65,6 @@ mod fs {
 // ------------------------------------------------------------------------------------------------
 // TODO: swap all cgmath for nalgebra!
 // ------------------------------------------------------------------------------------------------
-
 
 
 #[cfg(debug_assertions)]
@@ -119,7 +116,7 @@ fn create_debug_callback(instance: Arc<Instance>) -> Result<DebugCallback, Debug
     })
 }
 
-fn create_window(instance: Arc<Instance>, settings_width: u32, settings_height: u32, settings_title: String
+fn create_window(instance: Arc<Instance>, settings_width: u32, settings_height: u32, settings_title: String,
 ) -> Result<(EventsLoop, Arc<Surface<Window>>, [u32; 2]), String> {
     // This returns a `vulkano::swapchain::Surface` object that contains both a cross-platform winit
     // window and a cross-platform Vulkan surface that represents the surface of the window.
@@ -142,7 +139,6 @@ fn create_window(instance: Arc<Instance>, settings_width: u32, settings_height: 
     };
     Ok((events_loop, surface, dimensions))
 }
-
 
 
 fn main() {
@@ -186,12 +182,12 @@ fn main() {
 
 
     // The list of created queues is returned by the function alongside with the device.
-    let device_ext = DeviceExtensions { khr_swapchain: true, .. DeviceExtensions::none() };
+    let device_ext = DeviceExtensions { khr_swapchain: true, ..DeviceExtensions::none() };
     let (device, mut queues) = Device::new(
         physical,
         physical.supported_features(),
         &device_ext,
-        [(queue_family, 0.5)].iter().cloned()
+        [(queue_family, 0.5)].iter().cloned(),
     ).unwrap();
 
     // Since we can request multiple queues, the `queues` variable is in fact an iterator.
@@ -219,9 +215,9 @@ fn main() {
             &queue,
             SurfaceTransform::Identity,
             alpha,
-            PresentMode::Fifo,
+            PresentMode::Immediate,
             true,
-            None
+            None,
         )
     }.unwrap();
 
@@ -235,7 +231,7 @@ fn main() {
     let indices = INDICES.iter().cloned();
     let index_buffer = CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), indices).unwrap();
 
-    let uniform_buffer = CpuBufferPool::<vs::ty::Data>::new(device.clone(), BufferUsage::all());
+    let uniform_buffer_pool = CpuBufferPool::<vs::ty::Data>::new(device.clone(), BufferUsage::all());
 
     // The next step is to create the shaders.
     let vs = vs::Shader::load(device.clone()).unwrap();
@@ -294,15 +290,15 @@ fn main() {
 
     let aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
     // to correct for the vulkan clip space Y axis being the other way
-    let clip = Matrix4::new(1.0,  0.0, 0.0, 0.0,
-                                        0.0, -1.0, 0.0, 0.0,
-                                        0.0,  0.0, 0.5, 0.0,
-                                        0.0,  0.0, 0.5, 1.0);
+    let clip = Matrix4::new(1.0, 0.0, 0.0, 0.0,
+                            0.0, -1.0, 0.0, 0.0,
+                            0.0, 0.0, 0.5, 0.0,
+                            0.0, 0.0, 0.5, 1.0);
     let projection = clip * cgmath::perspective(
         Deg(settings_fov),
         aspect_ratio,
         settings_near_cutoff,
-        settings_far_cutoff
+        settings_far_cutoff,
     );
 
     let model_teapot_1 = {
@@ -317,85 +313,93 @@ fn main() {
         translation * rotation * Matrix4::from_scale(0.01)
     };
 
-    let mut mouse_dragging = false;
-    let sensitivity = 0.005;
+    let mut camera = ArcballCamera::new(
+        6.0,
+        Deg(90.0),
+        0.0,
+    );
 
-    let mut last_position = (0.0, 0.0);
-    let mut r = 6.0;
-    let mut theta = Deg(90.0);
-    let mut phi = 0.0;
+    struct Ubo {
+        projection: Matrix4<f32>,
+    }
+
+    let ubo = Ubo {
+        projection
+    };
+
+    impl Ubo {
+        fn get_uniform_data(&self, model_mat: Matrix4<f32>, view_mat: Matrix4<f32>) -> vs::ty::Data {
+            vs::ty::Data {
+                world: model_mat.into(),
+                view: view_mat.into(),
+                proj: self.projection.into(),
+            }
+        }
+    }
+
+
+    let (uniform_buffer_subbuffer_1, uniform_buffer_subbuffer_2) = {
+        // phi = elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0;
+
+        let view_mat = camera.generate_view_mat();
+
+        let buf1 = {
+            let uniform_data = ubo.get_uniform_data(model_teapot_1, view_mat);
+            uniform_buffer_pool.next(uniform_data).unwrap()
+        };
+
+        let buf2 = {
+            let uniform_data = ubo.get_uniform_data(model_teapot_2, view_mat);
+            uniform_buffer_pool.next(uniform_data).unwrap()
+        };
+        (buf1, buf2)
+    };
+
+
+    let set_1 = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
+        .add_buffer(uniform_buffer_subbuffer_1.clone()).unwrap()
+        .build().unwrap()
+    );
+
+    let set_2 = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
+        .add_buffer(uniform_buffer_subbuffer_2.clone()).unwrap()
+        .build().unwrap()
+    );
+
+
 
     loop {
-
+        let now = Instant::now();
         // Handling the window events in order to close the program when the user wants to close
         // it.
         let mut done = false;
         events_loop.poll_events(|ev| {
-            use winit::{MouseButton, ElementState, MouseScrollDelta};
             match ev {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::Resized(_) => recreate_swapchain = true,
-                    WindowEvent::CloseRequested => done = true,
-                    WindowEvent::KeyboardInput {
-                        input:
-                        winit::KeyboardInput {
-                            virtual_keycode: Some(virtual_code),
-                            state,
-                            ..
-                        },
-                        ..
-                    } => match (virtual_code, state) {
-                        (winit::VirtualKeyCode::Escape, _) => done = true,
-                        _ => (),
-                    },
-
-                    WindowEvent::MouseInput {
-                        device_id: _,
-                        state,
-                        button,
-                        ..
-                    } => if button == MouseButton::Left && state == ElementState::Pressed {
-                        mouse_dragging = true;
-                    } else if button == MouseButton::Left && state == ElementState::Released {
-                        mouse_dragging = false;
-                    },
-
-                    WindowEvent::CursorMoved {
-                        device_id: _,
-                        position: new_position,
-                        ..
-                    } => {
-                        if last_position.0 < 0.1 {
-                            last_position = new_position.into();
-                            return;
+                Event::WindowEvent { event, .. } => {
+                    if !camera.use_window_event(&event) {
+                        match event {
+                            WindowEvent::Resized(_) => recreate_swapchain = true,
+                            WindowEvent::CloseRequested => done = true,
+                            WindowEvent::KeyboardInput {
+                                input:
+                                winit::KeyboardInput {
+                                    virtual_keycode: Some(virtual_code),
+                                    state,
+                                    ..
+                                },
+                                ..
+                            } => match (virtual_code, state) {
+                                (winit::VirtualKeyCode::Escape, _) => done = true,
+                                _ => (),
+                            },
+                            _ => (),
                         }
-                        let x_offset = new_position.x - last_position.0;
-                        let y_offset = last_position.1 - new_position.y;
-                        last_position = new_position.into();
-
-                        if mouse_dragging {
-                            phi -= x_offset * sensitivity;
-                            theta += Rad(y_offset * sensitivity).into();
-                            theta = na::clamp(theta, Deg(0.1), Deg(179.9));
-                        }
-                    },
-
-                    WindowEvent::MouseWheel {
-                        device_id: _,
-                        delta: MouseScrollDelta::LineDelta(_, delta_y),
-                        ..
-                    } => {
-                        r -= delta_y as f64;
-                        r = na::clamp(r, 0.1, 200.0);
-                    },
-
-                    _ => (),
+                    }
                 },
                 _ => (),
             }
         });
         if done { return; }
-
 
         // It is important to call this function from time to time, otherwise resources will keep
         // accumulating and you will eventually reach an out of memory error.
@@ -426,60 +430,13 @@ fn main() {
                 &vs,
                 &fs,
                 &new_swapchain_images,
-                render_pass.clone()
+                render_pass.clone(),
             );
             pipeline = new_pipeline;
             framebuffers = new_framebuffers;
 
             recreate_swapchain = false;
         }
-
-        let (uniform_buffer_subbuffer_1, uniform_buffer_subbuffer_2) = {
-            //phi = elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0;
-
-            let x = r * theta.sin() * phi.cos();
-            let y = r * theta.sin() * phi.sin();
-            let z = r * theta.cos();
-
-            let trans = Matrix4::from_translation(Vector3::new(y, z, x));
-            let roty = Matrix4::from_angle_y(Rad(phi));
-            let rotx = Matrix4::from_angle_x(theta - Deg(90.0));
-            let view_mat: Matrix4<f64> = (trans * roty * rotx).invert().unwrap();
-
-            let buf1 = {
-                let uniform_data = vs::ty::Data {
-                    world: model_teapot_1.into(),
-                    view: view_mat.cast().unwrap().into(),
-                    proj: projection.into(),
-
-                };
-                uniform_buffer.next(uniform_data).unwrap()
-            };
-
-            let buf2 = {
-                let uniform_data = vs::ty::Data {
-                    world: model_teapot_2.into(),
-                    view: view_mat.cast().unwrap().into(),
-                    proj: projection.into(),
-
-                };
-                uniform_buffer.next(uniform_data).unwrap()
-            };
-            (buf1, buf2)
-        };
-
-        // TODO: think about the best way to do uniforms and push constants
-
-        let set_1 = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
-            .add_buffer(uniform_buffer_subbuffer_1).unwrap()
-            .build().unwrap()
-        );
-
-        let set_2 = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
-            .add_buffer(uniform_buffer_subbuffer_2).unwrap()
-            .build().unwrap()
-        );
-
 
 
         // Before we can draw on the output, we have to *acquire* an image from the swapchain.
@@ -488,7 +445,7 @@ fn main() {
             Err(AcquireError::OutOfDate) => {
                 recreate_swapchain = true;
                 continue;
-            },
+            }
             Err(err) => panic!("{:?}", err)
         };
 
@@ -501,11 +458,25 @@ fn main() {
             1f32.into()
         ];
 
+        let view_mat = camera.generate_view_mat();
+
         // In order to draw, we have to build a *command buffer*.
         let command_buffer = AutoCommandBufferBuilder::primary_one_time_submit(
             device.clone(),
-            queue.family()
+            queue.family(),
         ).unwrap()
+            // TODO: think about the best way to do uniforms and push constants
+            // TODO: especially use a dedicated transfer queue
+            .update_buffer(
+                uniform_buffer_subbuffer_1.clone(),
+                ubo.get_uniform_data(model_teapot_1, view_mat)
+            ).unwrap()
+
+            .update_buffer(
+                uniform_buffer_subbuffer_2.clone(),
+                ubo.get_uniform_data(model_teapot_2, view_mat)
+            ).unwrap()
+
             // Before we can draw, we have to *enter a render pass*.
             .begin_render_pass(framebuffers[image_num].clone(), false, clear_values)
             .unwrap()
@@ -517,7 +488,7 @@ fn main() {
                 vec!(vertex_buffer.clone(), normals_buffer.clone()),
                 index_buffer.clone(),
                 set_1.clone(),
-                fs::ty::PushData { color: color_1.into(), }
+                fs::ty::PushData { color: color_1.into() },
             ).unwrap()
 
             .draw_indexed(
@@ -526,7 +497,7 @@ fn main() {
                 vec!(vertex_buffer.clone(), normals_buffer.clone()),
                 index_buffer.clone(),
                 set_2.clone(),
-                fs::ty::PushData { color: color_2.into(), }
+                fs::ty::PushData { color: color_2.into() },
             ).unwrap()
 
             // We leave the render pass by calling `draw_end`.
@@ -561,6 +532,8 @@ fn main() {
         // Blocking may be the desired behavior, but if you don't want to block you should spawn a
         // separate thread dedicated to submissions.
 
+        let elapsed = now.elapsed();
+        println!("{}", elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0);
 
     }
 }
@@ -573,13 +546,12 @@ fn window_size_dependent_setup(
     images: &[Arc<SwapchainImage<Window>>],
     render_pass: Arc<RenderPassAbstract + Send + Sync>,
 ) -> (Arc<GraphicsPipelineAbstract + Send + Sync>, Vec<Arc<FramebufferAbstract + Send + Sync>>) {
-
     let dimensions = images[0].dimensions();
 
     let depth_buffer = AttachmentImage::transient(
         device.clone(),
         dimensions,
-        Format::D16Unorm
+        Format::D16Unorm,
     ).unwrap();
 
     let framebuffers = images.iter().map(|image| {
@@ -602,7 +574,7 @@ fn window_size_dependent_setup(
         .viewports(iter::once(Viewport {
             origin: [0.0, 0.0],
             dimensions: [dimensions[0] as f32, dimensions[1] as f32],
-            depth_range: 0.0 .. 1.0,
+            depth_range: 0.0..1.0,
         }))
         .fragment_shader(fs.main_entry_point(), ())
         .depth_stencil_simple_depth()
