@@ -14,13 +14,25 @@ extern crate vulkano;
 // The Vulkan library doesn't provide any functionality to create and handle windows.
 extern crate winit;
 extern crate nalgebra as na;
+extern crate nalgebra_glm as glm;
+extern crate tokio;
+#[macro_use]
+extern crate lazy_static;
 
 mod arcball_camera;
 pub use self::arcball_camera::*;
 
+mod js_camera;
+pub use self::js_camera::*;
+
+use winit::WindowEvent;
+use glm::Mat4x4;
 
 
-
+pub trait Controller {
+    fn use_window_event(&mut self, ev: &WindowEvent) -> bool;
+    fn generate_view_mat(&self) -> Mat4x4;
+}
 
 
 

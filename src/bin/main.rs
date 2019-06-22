@@ -12,6 +12,7 @@ extern crate winit;
 // The `vulkano_win` crate is the link between `vulkano` and `winit`.
 extern crate vulkano_win;
 extern crate nalgebra as na;
+extern crate nalgebra_glm as glm;
 
 use std::iter;
 use std::sync::Arc;
@@ -43,7 +44,8 @@ use winit::dpi::LogicalSize;
 
 use vulkano_win::VkSurfaceBuild;
 
-use cgmath::{Matrix4, Vector3, Vector4, Deg};
+use na::*;
+use glm::*;
 
 use ecg_vulkano::*;
 
@@ -61,11 +63,6 @@ mod fs {
             path: "assets/simple_frag.glsl"
         }
 }
-
-// ------------------------------------------------------------------------------------------------
-// TODO: swap all cgmath for nalgebra!
-// ------------------------------------------------------------------------------------------------
-
 
 #[cfg(debug_assertions)]
 fn create_instance() -> Arc<Instance> {
@@ -215,7 +212,7 @@ fn main() {
             &queue,
             SurfaceTransform::Identity,
             alpha,
-            PresentMode::Immediate,
+            PresentMode::Mailbox,
             true,
             None,
         )
@@ -286,38 +283,45 @@ fn main() {
     //
     // Destroying the `GpuFuture` blocks until the GPU is finished executing it. In order to avoid
     // that, we store the submission of the previous frame here.
-    let mut previous_frame_end = Box::new(sync::now(device.clone())) as Box<GpuFuture>;
+    let mut previous_frame_end = Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>;
 
     let aspect_ratio = dimensions[0] as f32 / dimensions[1] as f32;
     // to correct for the vulkan clip space Y axis being the other way
-    let clip = Matrix4::new(1.0, 0.0, 0.0, 0.0,
+    let clip = mat4x4(1.0, 0.0, 0.0, 0.0,
                             0.0, -1.0, 0.0, 0.0,
                             0.0, 0.0, 0.5, 0.0,
                             0.0, 0.0, 0.5, 1.0);
-    let projection = clip * cgmath::perspective(
-        Deg(settings_fov),
+    let projection = clip * perspective(
         aspect_ratio,
+        settings_fov.to_radians() / aspect_ratio,
         settings_near_cutoff,
         settings_far_cutoff,
     );
 
     let model_teapot_1 = {
-        let translation = Matrix4::from_translation(Vector3::new(1.5, 1.0, 0.0));
-        let scale = Matrix4::from_nonuniform_scale(1.0, 2.0, 1.0);
-        translation * scale * Matrix4::from_scale(0.01)
+        let translation = translation(&vec3(1.5, 1.0, 0.0));
+        let scale = scaling(&vec3(1.0, 2.0, 1.0));
+        translation * scale * scaling(&vec3(0.01, 0.01, 0.01))
     };
 
     let model_teapot_2 = {
-        let translation = Matrix4::from_translation(Vector3::new(-1.5, -1.0, 0.0));
-        let rotation = Matrix4::from_angle_z(Deg(45.0));
-        translation * rotation * Matrix4::from_scale(0.01)
+        let translation = translation(&vec3(-1.5, -1.0, 0.0));
+        let rotation = rotation(45.0f32.to_radians(), &vec3(0., 0., 1.));
+        translation * rotation * scaling(&vec3(0.01, 0.01, 0.01))
     };
 
-    let mut camera = ArcballCamera::new(
-        6.0,
-        Deg(90.0),
-        0.0,
-    );
+    let controller = 1;
+
+    let mut camera: Box<dyn Controller> = if controller == 1 {
+        Box::new(JsCamera::new())
+    } else {
+        Box::new(ArcballCamera::new(
+            6.0,
+            90.0f32.to_radians(),
+            0.0,
+        ))
+    };
+
 
     struct Ubo {
         projection: Matrix4<f32>,
@@ -465,7 +469,6 @@ fn main() {
             device.clone(),
             queue.family(),
         ).unwrap()
-            // TODO: think about the best way to do uniforms and push constants
             // TODO: especially use a dedicated transfer queue
             .update_buffer(
                 uniform_buffer_subbuffer_1.clone(),
@@ -532,9 +535,7 @@ fn main() {
         // Blocking may be the desired behavior, but if you don't want to block you should spawn a
         // separate thread dedicated to submissions.
 
-        let elapsed = now.elapsed();
-        println!("{}", elapsed.as_secs() as f64 + elapsed.subsec_nanos() as f64 / 1_000_000_000.0);
-
+        let _elapsed = now.elapsed(); // for fps measurement
     }
 }
 
@@ -544,8 +545,8 @@ fn window_size_dependent_setup(
     vs: &vs::Shader,
     fs: &fs::Shader,
     images: &[Arc<SwapchainImage<Window>>],
-    render_pass: Arc<RenderPassAbstract + Send + Sync>,
-) -> (Arc<GraphicsPipelineAbstract + Send + Sync>, Vec<Arc<FramebufferAbstract + Send + Sync>>) {
+    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
+) -> (Arc<dyn GraphicsPipelineAbstract + Send + Sync>, Vec<Arc<dyn FramebufferAbstract + Send + Sync>>) {
     let dimensions = images[0].dimensions();
 
     let depth_buffer = AttachmentImage::transient(
@@ -560,7 +561,7 @@ fn window_size_dependent_setup(
                 .add(image.clone()).unwrap()
                 .add(depth_buffer.clone()).unwrap()
                 .build().unwrap()
-        ) as Arc<FramebufferAbstract + Send + Sync>
+        ) as Arc<dyn FramebufferAbstract + Send + Sync>
     }).collect::<Vec<_>>();
 
     // However in the teapot example, we recreate the pipelines with a hardcoded viewport instead.

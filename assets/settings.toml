@@ -8,3 +8,5 @@ title = "ECG Vulkano"
 fov = 60.0
 near = 0.1
 far = 100.0
+
+controller = 1
